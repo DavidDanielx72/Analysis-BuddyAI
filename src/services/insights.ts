@@ -101,21 +101,41 @@ interface ContentTheme {
 }
 
 function identifyContentThemes(items: AnalysisItem[]): ContentTheme[] {
-  // Group items by shared keywords to find what people are actually talking about
-  const themeMap = new Map<string, AnalysisItem[]>();
+  // Extract meaningful multi-word phrases (bigrams + trigrams) across all items
+  const phraseMap = new Map<string, AnalysisItem[]>();
 
   for (const item of items) {
-    const kws = extractKeywords(item.text, 5);
-    for (const kw of kws) {
-      if (kw.length < 4) continue;
-      const arr = themeMap.get(kw) ?? [];
+    const tokens = item.text
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter((t) => t.length > 2 && !STOPWORDS.has(t));
+
+    const seen = new Set<string>();
+
+    // Bigrams
+    for (let i = 0; i < tokens.length - 1; i++) {
+      const phrase = `${tokens[i]} ${tokens[i + 1]}`;
+      if (seen.has(phrase)) continue;
+      seen.add(phrase);
+      const arr = phraseMap.get(phrase) ?? [];
       arr.push(item);
-      themeMap.set(kw, arr);
+      phraseMap.set(phrase, arr);
+    }
+
+    // Trigrams (for richer context)
+    for (let i = 0; i < tokens.length - 2; i++) {
+      const phrase = `${tokens[i]} ${tokens[i + 1]} ${tokens[i + 2]}`;
+      if (seen.has(phrase)) continue;
+      seen.add(phrase);
+      const arr = phraseMap.get(phrase) ?? [];
+      arr.push(item);
+      phraseMap.set(phrase, arr);
     }
   }
 
-  // Find themes mentioned by multiple people
-  const themes = [...themeMap.entries()]
+  // Find phrases mentioned by multiple people, sort by frequency
+  const themes = [...phraseMap.entries()]
     .filter(([, arr]) => arr.length >= 2)
     .map(([label, arr]) => {
       const avgScore = arr.reduce((s, it) => s + it.result.score, 0) / arr.length;
@@ -125,10 +145,20 @@ function identifyContentThemes(items: AnalysisItem[]): ContentTheme[] {
         sentiment: (avgScore > 0.05 ? 'positive' : avgScore < -0.05 ? 'negative' : 'neutral') as SentimentLabel,
       };
     })
+    // Deduplicate: remove phrases that are substrings of longer phrases with same or higher count
     .sort((a, b) => b.items.length - a.items.length)
-    .slice(0, 5);
+    .slice(0, 8);
 
-  return themes;
+  // Remove sub-phrases (e.g. if "goat is back" and "is back" both exist, keep only "goat is back")
+  const filtered: ContentTheme[] = [];
+  for (const theme of themes) {
+    const isSubstring = filtered.some(
+      (f) => f.label.includes(theme.label) && f.items.length >= theme.items.length,
+    );
+    if (!isSubstring) filtered.push(theme);
+  }
+
+  return filtered.slice(0, 5);
 }
 
 function pickRepresentativeQuotes(items: AnalysisItem[], count: number, sentiment: SentimentLabel): string[] {
@@ -318,16 +348,22 @@ function generateSummary(
   const sentimentDesc = describeSentimentBreakdown(overall);
   const themes = identifyContentThemes(items);
 
-  // Build a content-aware summary by actually reading what people said
+  // Build a natural-language summary that synthesizes what people actually said
   const parts: string[] = [];
 
   // Opening: sentiment overview
   parts.push(`Analysis of ${total} ${sourceLabel.toLowerCase()} entries found sentiment to be ${sentimentDesc}.`);
 
-  // What are people talking about? (use themes, not raw keywords)
+  // What are people talking about? (use multi-word themes, not single keywords)
   if (themes.length) {
     const topThemes = themes.slice(0, 3).map((t) => t.label);
-    parts.push(`The conversation centers on ${topThemes.join(', ')}.`);
+    if (topThemes.length === 1) {
+      parts.push(`The conversation centers on ${topThemes[0]}.`);
+    } else if (topThemes.length === 2) {
+      parts.push(`The conversation centers on ${topThemes.join(' and ')}.`);
+    } else {
+      parts.push(`The conversation centers on ${topThemes.slice(0, -1).join(', ')}, and ${topThemes[topThemes.length - 1]}.`);
+    }
   }
 
   // What's the emotional tone?
@@ -350,7 +386,7 @@ function generateSummary(
     parts.push(`Representative comments include ${anyQuotes.join(' and ')}.`);
   }
 
-  // What specifically do people like / dislike? (use themes with sentiment, not raw keywords)
+  // What specifically do people like / dislike? (use multi-word themes with sentiment)
   const positiveThemes = themes.filter((t) => t.sentiment === 'positive').slice(0, 3).map((t) => t.label);
   const negativeThemes = themes.filter((t) => t.sentiment === 'negative').slice(0, 3).map((t) => t.label);
 
@@ -385,7 +421,7 @@ function generateExplanation(
     `Confidence scores reflect how strongly the sentiment signal dominates the text. High confidence means the text used clearly polarized language; low confidence means the language was ambiguous or mixed.`,
   );
   exp.push(
-    `Recurring themes were detected by finding two-word phrases that appear across multiple entries. Themes inherit the average sentiment of the entries they appear in, which is why some topics are tagged positive and others negative.`,
+    `Recurring themes were detected by finding meaningful multi-word phrases (2-3 word combinations) that appear across multiple entries. Themes inherit the average sentiment of the entries they appear in, which is why some topics are tagged positive and others negative.`,
   );
   return exp;
 }

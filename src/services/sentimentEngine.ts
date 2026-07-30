@@ -118,15 +118,39 @@ const NEGATIVE_WORDS = new Set([
 // ---- Words that are positive ONLY in context (not inherently) ----
 // These are handled by phrase patterns, not the word set, to avoid
 // misclassification when used neutrally.
-const CONTEXT_DEPENDENT = new Set([
+const CONTEXT_DEPENDENT_POSITIVE = new Set([
   'back','returned','return','returns','here','finally','glad','missed',
+]);
+const CONTEXT_DEPENDENT_NEGATIVE = new Set([
   'fled','ran','left','gone',
+]);
+// Words that are negative ONLY in certain contexts — when used in a
+// narrative contrast ("I was depressed... but now I'm happy") they
+// should NOT contribute negative sentiment. The phrase patterns
+// handle the contrast detection; these words are dampened when a
+// contrast pattern has already fired.
+const EMOTIONAL_STATE_WORDS = new Set([
+  'depressed','depressing','sad','unhappy','miserable','down','struggling',
+  'suffering','suffer','lonely','alone','hopeless','helpless','bleak','grim',
+  'gloomy','broken','lost','hurting','hurt','painful','pain','agony',
+  'torment','anguish','despair','crying','tears','heartbroken','devastated',
+  'crushed','abandoned','rejected','betrayed',
+]);
+
+const CONTEXT_DEPENDENT = new Set([
+  ...CONTEXT_DEPENDENT_POSITIVE,
+  ...CONTEXT_DEPENDENT_NEGATIVE,
 ]);
 
 // Remove context-dependent words from the base sets so they only
 // trigger via phrase patterns
 for (const w of CONTEXT_DEPENDENT) {
   POSITIVE_WORDS.delete(w);
+  NEGATIVE_WORDS.delete(w);
+}
+// Remove emotional state words from negative set — they'll be handled
+// by phrase patterns and only count as negative when NOT in a contrast
+for (const w of EMOTIONAL_STATE_WORDS) {
   NEGATIVE_WORDS.delete(w);
 }
 
@@ -221,6 +245,21 @@ const PHRASE_PATTERNS: PhrasePattern[] = [
   { regex: /\bbro\s+got\s+the\s+worst\b.{0,60}?\bthen\s+(fled|ran|left|dipped|bounced|peaced)\b/i, sentiment: 'positive', weight: 1.5, emotion: 'excited' },
   { regex: /\b(got\s+the\s+worst\b.{0,60}?\b(fled|ran|left|dipped|bounced))\b/i, sentiment: 'positive', weight: 1.2, emotion: 'excited' },
   { regex: /\bglad\s+(ur|you'?re|u)\s+back\b/i, sentiment: 'positive', weight: 2.0, emotion: 'happy' },
+
+  // --- Narrative contrast / emotional turn (positive resolution) ---
+  // "I was/have been depressed/sad... but/and now X brightened/made me happy"
+  // The negative state is just context; the overall sentiment is positive.
+  { regex: /\b(i'?ve\s+been\s+(in\s+a\s+)?(depressed|sad|down|bad|dark|rough|tough|low|hard)\s*(state|place|time|mood|period|spot|headspace)?\b.{0,120}?\b(brightened|made\s+my\s+day|cheered|lifted|helped|saved|healed|happy|glad|smile|better|turned\s+around|changed)\b)/i, sentiment: 'positive', weight: 2.5, emotion: 'appreciative' },
+  { regex: /\b(been\s+(in\s+a\s+)?(depressed|sad|down|bad|dark|rough|tough|low|hard)\s*(state|place|time|mood|period|spot|headspace)?\b.{0,120}?\b(brightened|made\s+my\s+day|cheered|lifted|helped|saved|healed|happy|glad|smile|better|turned\s+around|changed)\b)/i, sentiment: 'positive', weight: 2.5, emotion: 'appreciative' },
+  { regex: /\b((depressed|sad|down|unhappy|miserable|struggling|suffering)\s*(state|place|time|mood|period)?\b.{0,120}?\b(brightened|made\s+my\s+day|cheered|lifted|helped|saved|healed|happy|glad|smile|better|turned\s+around|changed)\b)/i, sentiment: 'positive', weight: 2.2, emotion: 'appreciative' },
+  // "was X but now Y" general contrast pattern
+  { regex: /\b(was\s+(so\s+)?(depressed|sad|down|unhappy|miserable|lost|struggling|hurting|broken)\b.{0,100}?(but|now|then|and)\b.{0,80}?(happy|glad|better|healed|smiling|brightened|grateful|blessed|alive|good|great|amazing|wonderful|joy|peace|hope|love)\b)/i, sentiment: 'positive', weight: 2.0, emotion: 'happy' },
+  // "brightened my day" standalone
+  { regex: /\b(brightened\s+my\s+(day|week|month|mood|spirits)|made\s+my\s+(day|week|month)|cheered\s+me\s+up|lifted\s+my\s+(spirits|mood)|turned\s+my\s+(day|week|mood)\s+around)\b/i, sentiment: 'positive', weight: 2.0, emotion: 'happy' },
+  // "seeing the return of X" = positive
+  { regex: /\b(seeing\s+the\s+return\s+of|seeing\s+x\s+return|so\s+happy\s+to\s+see|so\s+glad\s+to\s+see)\b/i, sentiment: 'positive', weight: 1.5, emotion: 'excited' },
+  // "actually" as a positive surprise marker
+  { regex: /\bactually\s+(brightened|made|cheered|helped|saved|improved|better|good|great|amazing|love|enjoy)\b/i, sentiment: 'positive', weight: 1.3, emotion: 'happy' },
 
   // --- Genuine negative ---
   { regex: /\b(i\s+hate|absolutely\s+hate|fucking\s+hate|really\s+hate)\b/i, sentiment: 'negative', weight: 2.0, emotion: 'angry' },
@@ -413,10 +452,12 @@ function scoreText(text: string): {
   negative: number;
   emotions: Record<EmotionLabel, number>;
   contributingWords: string[];
+  contrastDetected: boolean;
 } {
   const sentences = splitSentences(text.length ? text : ' ');
   let positive = 0;
   let negative = 0;
+  let contrastDetected = false;
   const emotions = {
     happy: 0, excited: 0, angry: 0, sad: 0,
     frustrated: 0, appreciative: 0, confused: 0, disappointed: 0,
@@ -431,6 +472,10 @@ function scoreText(text: string): {
       for (const m of matches) {
         if (pattern.sentiment === 'positive') {
           positive += pattern.weight;
+          // Track if this is a contrast/turn pattern
+          if (/brightened|depressed|sad|down|unhappy|miserable|struggling|was\s+|been\s+/.test(m)) {
+            contrastDetected = true;
+          }
         } else {
           negative += pattern.weight;
         }
@@ -473,6 +518,10 @@ function scoreText(text: string): {
 
       // Skip if context-dependent word (handled by phrase patterns)
       if (CONTEXT_DEPENDENT.has(tok)) continue;
+
+      // If contrast was detected by phrase patterns, skip emotional
+      // state words entirely — they're narrative context, not sentiment
+      if (contrastDetected && EMOTIONAL_STATE_WORDS.has(tok)) continue;
 
       // Check for negation within previous 3 tokens
       const isNegated =
@@ -519,7 +568,7 @@ function scoreText(text: string): {
     }
   }
 
-  return { positive, negative, emotions, contributingWords: contributing };
+  return { positive, negative, emotions, contributingWords: contributing, contrastDetected };
 }
 
 function totalSignal(pos: number, neg: number): number {
