@@ -7,7 +7,30 @@ import type {
 } from '@/types';
 import { analyzeSentiment, dominantEmotionAcross, extractKeywords } from './sentimentEngine';
 
-// ---- Topic extraction (n-gram based) ----
+// ---- Topic extraction (n-gram based with filtering) ----
+
+// Filter out bigrams that are meaningless noise
+function isMeaningfulBigram(a: string, b: string): boolean {
+  // Skip if either word is too short or a number
+  if (a.length < 3 || b.length < 3) return false;
+  // Skip if both words are the same
+  if (a === b) return false;
+  // Skip common filler pairs
+  const pair = `${a} ${b}`;
+  const fillerPairs = new Set([
+    'this is', 'that is', 'it was', 'i am', 'you are', 'they are', 'we are',
+    'this was', 'that was', 'there is', 'there was', 'here is', 'here was',
+    'i was', 'you were', 'they were', 'we were', 'i have', 'you have',
+    'they have', 'we have', 'i had', 'you had', 'they had', 'we had',
+    'do not', 'does not', 'did not', 'will not', 'can not', 'could not',
+    'would not', 'should not', 'is not', 'was not', 'are not', 'were not',
+    'have not', 'has not', 'had not', 'if you', 'if i', 'but i', 'but you',
+    'and i', 'and you', 'and they', 'and we', 'or i', 'or you', 'so i',
+    'so you', 'so they', 'so we', 'then i', 'then you', 'then they',
+  ]);
+  if (fillerPairs.has(pair)) return false;
+  return true;
+}
 
 function extractTopics(items: AnalysisItem[]): { topic: string; count: number; sentiment: SentimentLabel }[] {
   const ngramCounts = new Map<string, { count: number; sentimentScores: number[] }>();
@@ -19,6 +42,7 @@ function extractTopics(items: AnalysisItem[]): { topic: string; count: number; s
       .filter((t) => t.length > 3);
     const seen = new Set<string>();
     for (let i = 0; i < tokens.length - 1; i++) {
+      if (!isMeaningfulBigram(tokens[i], tokens[i + 1])) continue;
       const bigram = `${tokens[i]} ${tokens[i + 1]}`;
       if (seen.has(bigram)) continue;
       seen.add(bigram);
@@ -35,7 +59,7 @@ function extractTopics(items: AnalysisItem[]): { topic: string; count: number; s
       return {
         topic,
         count: v.count,
-        sentiment: (avg > 0.08 ? 'positive' : avg < -0.08 ? 'negative' : 'neutral') as SentimentLabel,
+        sentiment: (avg > 0.05 ? 'positive' : avg < -0.05 ? 'negative' : 'neutral') as SentimentLabel,
       };
     })
     .sort((a, b) => b.count - a.count)
@@ -61,11 +85,88 @@ function aggregateKeywords(items: AnalysisItem[]) {
       return {
         word,
         count: v.count,
-        sentiment: (avg > 0.08 ? 'positive' : avg < -0.08 ? 'negative' : 'neutral') as SentimentLabel,
+        sentiment: (avg > 0.05 ? 'positive' : avg < -0.05 ? 'negative' : 'neutral') as SentimentLabel,
       };
     })
     .sort((a, b) => b.count - a.count)
     .slice(0, 30);
+}
+
+// ---- Content synthesis helpers ----
+
+interface ContentTheme {
+  label: string;
+  items: AnalysisItem[];
+  sentiment: SentimentLabel;
+}
+
+function identifyContentThemes(items: AnalysisItem[]): ContentTheme[] {
+  // Group items by shared keywords to find what people are actually talking about
+  const themeMap = new Map<string, AnalysisItem[]>();
+
+  for (const item of items) {
+    const kws = extractKeywords(item.text, 5);
+    for (const kw of kws) {
+      if (kw.length < 4) continue;
+      const arr = themeMap.get(kw) ?? [];
+      arr.push(item);
+      themeMap.set(kw, arr);
+    }
+  }
+
+  // Find themes mentioned by multiple people
+  const themes = [...themeMap.entries()]
+    .filter(([, arr]) => arr.length >= 2)
+    .map(([label, arr]) => {
+      const avgScore = arr.reduce((s, it) => s + it.result.score, 0) / arr.length;
+      return {
+        label,
+        items: arr,
+        sentiment: (avgScore > 0.05 ? 'positive' : avgScore < -0.05 ? 'negative' : 'neutral') as SentimentLabel,
+      };
+    })
+    .sort((a, b) => b.items.length - a.items.length)
+    .slice(0, 5);
+
+  return themes;
+}
+
+function pickRepresentativeQuotes(items: AnalysisItem[], count: number, sentiment: SentimentLabel): string[] {
+  return items
+    .filter((i) => i.result.label === sentiment)
+    .sort((a, b) => Math.abs(b.result.score) - Math.abs(a.result.score))
+    .slice(0, count)
+    .map((i) => `"${i.text.slice(0, 100)}${i.text.length > 100 ? '...' : ''}"`);
+}
+
+function describeSentimentBreakdown(overall: AnalysisRecord['overall']): string {
+  const posPct = Math.round(overall.positive * 100);
+  const neuPct = Math.round(overall.neutral * 100);
+  const negPct = Math.round(overall.negative * 100);
+
+  if (posPct >= 70) return `overwhelmingly positive (${posPct}% positive, ${neuPct}% neutral, ${negPct}% negative)`;
+  if (posPct >= 50) return `mostly positive (${posPct}% positive, ${neuPct}% neutral, ${negPct}% negative)`;
+  if (negPct >= 70) return `overwhelmingly negative (${negPct}% negative, ${neuPct}% neutral, ${posPct}% positive)`;
+  if (negPct >= 50) return `mostly negative (${negPct}% negative, ${neuPct}% neutral, ${posPct}% positive)`;
+  return `mixed (${posPct}% positive, ${neuPct}% neutral, ${negPct}% negative)`;
+}
+
+function describeDominantEmotion(emotion: EmotionLabel, items: AnalysisItem[]): string {
+  const emotionItems = items.filter((i) => i.result.dominantEmotion === emotion);
+  const examples = emotionItems.slice(0, 1).map((i) => `"${i.text.slice(0, 80)}${i.text.length > 80 ? '...' : ''}"`);
+
+  const descriptions: Record<EmotionLabel, string> = {
+    happy: `happiness and joy${examples.length ? `, as seen in ${examples[0]}` : ''}`,
+    excited: `excitement and enthusiasm${examples.length ? `, like ${examples[0]}` : ''}`,
+    appreciative: `appreciation and gratitude${examples.length ? `, reflected in ${examples[0]}` : ''}`,
+    angry: `anger and frustration${examples.length ? `, evident in ${examples[0]}` : ''}`,
+    frustrated: `frustration and annoyance${examples.length ? `, as in ${examples[0]}` : ''}`,
+    sad: `sadness and disappointment${examples.length ? `, like ${examples[0]}` : ''}`,
+    disappointed: `disappointment${examples.length ? `, seen in ${examples[0]}` : ''}`,
+    confused: `confusion and uncertainty${examples.length ? `, as in ${examples[0]}` : ''}`,
+  };
+
+  return descriptions[emotion] ?? descriptions.happy;
 }
 
 // ---- Insight generation ----
@@ -79,16 +180,19 @@ function generateInsights(
 ): string[] {
   const insights: string[] = [];
   const total = overall.totalItems || items.length;
+  const themes = identifyContentThemes(items);
 
   insights.push(
-    `Across ${total} ${sourceLabel.toLowerCase()} entries, ${Math.round(overall.positive * 100)}% express positive sentiment, ${Math.round(overall.neutral * 100)}% are neutral, and ${Math.round(overall.negative * 100)}% are negative. The overall sentiment score of ${overall.averageScore.toFixed(2)} indicates a ${overall.averageScore > 0.1 ? 'generally favorable' : overall.averageScore < -0.1 ? 'predominantly critical' : 'mixed'} response.`,
+    `Across ${total} ${sourceLabel.toLowerCase()} entries, sentiment is ${describeSentimentBreakdown(overall)}. The overall sentiment score of ${overall.averageScore.toFixed(2)} indicates a ${overall.averageScore > 0.1 ? 'generally favorable' : overall.averageScore < -0.1 ? 'predominantly critical' : 'mixed'} response.`,
   );
 
-  if (topics.length) {
-    const top = topics.slice(0, 3);
-    const topicStr = top.map((t) => `"${t.topic}" (${t.count} mentions, ${t.sentiment})`).join(', ');
+  if (themes.length) {
+    const topThemes = themes.slice(0, 3);
+    const themeStr = topThemes
+      .map((t) => `${t.label} (${t.items.length} mentions, ${t.sentiment})`)
+      .join(', ');
     insights.push(
-      `The most discussed themes are ${topicStr}. These recurring topics represent the core of what your audience is talking about and should guide prioritization.`,
+      `The most discussed themes are ${themeStr}. These recurring topics represent the core of what your audience is talking about and should guide prioritization.`,
     );
   }
 
@@ -133,15 +237,13 @@ function generateInsights(
     );
   }
 
-  // Customer behaviour
   insights.push(
-    `Customer behaviour signals: audiences are ${overall.positive > overall.negative ? 'engaged and vocal about what works' : 'vocal about friction points'}. ${topics.length ? 'They tend to cluster discussion around ' + topics.slice(0, 2).map((t) => `"${t.topic}"`).join(' and ') + '.' : 'Discussion is broadly distributed with no single dominant theme.'}`,
+    `Audience behaviour signals: viewers are ${overall.positive > overall.negative ? 'engaged and vocal about what works' : 'vocal about friction points'}. ${themes.length ? 'They tend to cluster discussion around ' + themes.slice(0, 2).map((t) => t.label).join(' and ') + '.' : 'Discussion is broadly distributed with no single dominant theme.'}`,
   );
 
-  // Opportunities & risks
   if (negKeywords.length) {
     insights.push(
-      `Business opportunity: converting the negative feedback around ${negKeywords.slice(0, 2).map((k) => k.word).join(' and ')} into product improvements could differentiate you from competitors who ignore these signals.`,
+      `Opportunity: converting the negative feedback around ${negKeywords.slice(0, 2).map((k) => k.word).join(' and ')} into improvements could differentiate you from competitors who ignore these signals.`,
     );
   }
   insights.push(
@@ -203,7 +305,7 @@ function generateRecommendations(
   return recs.slice(0, 8);
 }
 
-// ---- Summary ----
+// ---- Summary (content-aware synthesis) ----
 
 function generateSummary(
   overall: AnalysisRecord['overall'],
@@ -213,52 +315,53 @@ function generateSummary(
   items: AnalysisItem[],
 ): string {
   const total = overall.totalItems;
-  const posPct = Math.round(overall.positive * 100);
-  const neuPct = Math.round(overall.neutral * 100);
-  const negPct = Math.round(overall.negative * 100);
+  const sentimentDesc = describeSentimentBreakdown(overall);
+  const themes = identifyContentThemes(items);
 
-  const tone =
-    overall.averageScore > 0.15
-      ? 'overwhelmingly positive'
-      : overall.averageScore > 0.05
-        ? 'mostly positive'
-        : overall.averageScore > -0.05
-          ? 'mixed'
-          : overall.averageScore > -0.15
-            ? 'mostly negative'
-            : 'overwhelmingly negative';
+  // Build a content-aware summary by actually reading what people said
+  const parts: string[] = [];
 
-  const topTopics = topics.slice(0, 3).map((t) => t.topic);
-  const topicStr = topTopics.length
-    ? ` The conversation centers on ${topTopics.join(', ')}.`
-    : '';
+  // Opening: sentiment overview
+  parts.push(`Analysis of ${total} ${sourceLabel.toLowerCase()} entries found sentiment to be ${sentimentDesc}.`);
 
-  const posKw = keywords.filter((k) => k.sentiment === 'positive').slice(0, 3).map((k) => k.word);
-  const negKw = keywords.filter((k) => k.sentiment === 'negative').slice(0, 3).map((k) => k.word);
-
-  const positiveExamples = items
-    .filter((i) => i.result.label === 'positive')
-    .slice(0, 2)
-    .map((i) => `"${i.text.slice(0, 80)}${i.text.length > 80 ? '...' : ''}"`)
-    .join(' and ');
-  const negativeExamples = items
-    .filter((i) => i.result.label === 'negative')
-    .slice(0, 2)
-    .map((i) => `"${i.text.slice(0, 80)}${i.text.length > 80 ? '...' : ''}"`)
-    .join(' and ');
-
-  let detail = '';
-  if (posPct > negPct && posKw.length) {
-    detail = ` Reviewers particularly praise ${posKw.join(', ')}${positiveExamples ? `, with comments like ${positiveExamples}` : ''}.`;
-  } else if (negPct > posPct && negKw.length) {
-    detail = ` Common concerns include ${negKw.join(', ')}${negativeExamples ? `, with comments like ${negativeExamples}` : ''}.`;
-  } else {
-    detail = ` Feedback is balanced with no single dominant direction.`;
+  // What are people talking about? (use themes, not raw keywords)
+  if (themes.length) {
+    const topThemes = themes.slice(0, 3).map((t) => t.label);
+    parts.push(`The conversation centers on ${topThemes.join(', ')}.`);
   }
 
-  const emotionStr = ` The dominant emotion across all entries is "${overall.dominantEmotion}"`;
+  // What's the emotional tone?
+  const emotionDesc = describeDominantEmotion(overall.dominantEmotion, items);
+  parts.push(`The dominant emotional tone is ${emotionDesc}.`);
 
-  return `Analysis of ${total} ${sourceLabel.toLowerCase()} entries found sentiment to be ${tone}, with ${posPct}% positive, ${neuPct}% neutral, and ${negPct}% negative feedback.${topicStr}${detail}${emotionStr}.`;
+  // Pick representative quotes that actually illustrate the sentiment
+  const positiveQuotes = pickRepresentativeQuotes(items, 2, 'positive');
+  const negativeQuotes = pickRepresentativeQuotes(items, 2, 'negative');
+
+  const posPct = Math.round(overall.positive * 100);
+  const negPct = Math.round(overall.negative * 100);
+
+  if (posPct >= negPct && positiveQuotes.length) {
+    parts.push(`Positive feedback highlights include ${positiveQuotes.join(' and ')}.`);
+  } else if (negPct > posPct && negativeQuotes.length) {
+    parts.push(`Negative feedback includes ${negativeQuotes.join(' and ')}.`);
+  } else if (positiveQuotes.length || negativeQuotes.length) {
+    const anyQuotes = [...positiveQuotes, ...negativeQuotes].slice(0, 2);
+    parts.push(`Representative comments include ${anyQuotes.join(' and ')}.`);
+  }
+
+  // What specifically do people like / dislike? (use themes with sentiment, not raw keywords)
+  const positiveThemes = themes.filter((t) => t.sentiment === 'positive').slice(0, 3).map((t) => t.label);
+  const negativeThemes = themes.filter((t) => t.sentiment === 'negative').slice(0, 3).map((t) => t.label);
+
+  if (positiveThemes.length) {
+    parts.push(`Reviewers particularly appreciate ${positiveThemes.join(', ')}.`);
+  }
+  if (negativeThemes.length) {
+    parts.push(`Common concerns revolve around ${negativeThemes.join(', ')}.`);
+  }
+
+  return parts.join(' ');
 }
 
 // ---- Explanation ----
@@ -270,7 +373,7 @@ function generateExplanation(
 ): string[] {
   const exp: string[] = [];
   exp.push(
-    `Sentiment is classified by evaluating each piece of text against a lexicon of positive and negative terms, accounting for negation ("not good") and intensifiers ("very good"). ${Math.round(overall.positive * 100)}% of entries contained more positive signal, ${Math.round(overall.negative * 100)}% more negative, and ${Math.round(overall.neutral * 100)}% were balanced or lacked strong signal.`,
+    `Sentiment is classified by evaluating each piece of text against a lexicon of positive and negative terms, accounting for negation ("not good"), intensifiers ("very good"), contextual phrases ("too much hate" = positive defense), and internet slang ("GOAT", "based", "fire"). ${Math.round(overall.positive * 100)}% of entries contained more positive signal, ${Math.round(overall.negative * 100)}% more negative, and ${Math.round(overall.neutral * 100)}% were balanced or lacked strong signal.`,
   );
   const posKw = keywords.filter((k) => k.sentiment === 'positive').slice(0, 5);
   const negKw = keywords.filter((k) => k.sentiment === 'negative').slice(0, 5);
@@ -295,7 +398,6 @@ function buildTrend(items: AnalysisItem[]): AnalysisRecord['trendData'] {
   const sorted = [...withTs].sort((a, b) =>
     (a.timestamp ?? '').localeCompare(b.timestamp ?? ''),
   );
-  // Group by day
   const groups = new Map<string, AnalysisItem[]>();
   for (const it of sorted) {
     const day = (it.timestamp ?? '').slice(0, 10);
