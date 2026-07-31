@@ -216,29 +216,54 @@ function generateInsights(
     `Across ${total} ${sourceLabel.toLowerCase()} entries, sentiment is ${describeSentimentBreakdown(overall)}. The overall sentiment score of ${overall.averageScore.toFixed(2)} indicates a ${overall.averageScore > 0.1 ? 'generally favorable' : overall.averageScore < -0.1 ? 'predominantly critical' : 'mixed'} response.`,
   );
 
+  // Theme-driven insights (what people actually talked about)
   if (themes.length) {
     const topThemes = themes.slice(0, 3);
     const themeStr = topThemes
-      .map((t) => `${t.label} (${t.items.length} mentions, ${t.sentiment})`)
+      .map((t) => `"${t.label}" (${t.items.length} mentions, ${t.sentiment})`)
       .join(', ');
     insights.push(
       `The most discussed themes are ${themeStr}. These recurring topics represent the core of what your audience is talking about and should guide prioritization.`,
     );
+
+    // Per-theme sentiment breakdown
+    for (const theme of topThemes.slice(0, 2)) {
+      const posCount = theme.items.filter((i) => i.result.label === 'positive').length;
+      const negCount = theme.items.filter((i) => i.result.label === 'negative').length;
+      const totalCount = theme.items.length;
+      if (posCount > negCount && posCount > 0) {
+        insights.push(
+          `"${theme.label}" is received positively — ${Math.round((posCount / totalCount) * 100)}% of mentions are positive. This is a strength to lean into.`,
+        );
+      } else if (negCount > posCount && negCount > 0) {
+        insights.push(
+          `"${theme.label}" is a pain point — ${Math.round((negCount / totalCount) * 100)}% of mentions are negative. This needs immediate attention.`,
+        );
+      }
+    }
   }
 
-  const posKeywords = keywords.filter((k) => k.sentiment === 'positive').slice(0, 5);
-  const negKeywords = keywords.filter((k) => k.sentiment === 'negative').slice(0, 5);
-  if (posKeywords.length) {
+  // Keyword-driven strengths and concerns (use multi-word themes where available)
+  const positiveThemes = themes.filter((t) => t.sentiment === 'positive').slice(0, 3).map((t) => t.label);
+  const negativeThemes = themes.filter((t) => t.sentiment === 'negative').slice(0, 3).map((t) => t.label);
+  const posKeywords = keywords.filter((k) => k.sentiment === 'positive').slice(0, 5).map((k) => k.word);
+  const negKeywords = keywords.filter((k) => k.sentiment === 'negative').slice(0, 5).map((k) => k.word);
+
+  const strengthTerms = positiveThemes.length ? positiveThemes : posKeywords;
+  const concernTerms = negativeThemes.length ? negativeThemes : negKeywords;
+
+  if (strengthTerms.length) {
     insights.push(
-      `Strengths highlighted by your audience include: ${posKeywords.map((k) => k.word).join(', ')}. These are consistently associated with positive experiences and are competitive advantages worth promoting.`,
+      `Strengths highlighted by your audience include: ${strengthTerms.join(', ')}. These are consistently associated with positive experiences and are competitive advantages worth promoting.`,
     );
   }
-  if (negKeywords.length) {
+  if (concernTerms.length) {
     insights.push(
-      `Recurring concerns cluster around: ${negKeywords.map((k) => k.word).join(', ')}. These terms appear most often in negative feedback and point to areas requiring immediate attention.`,
+      `Recurring concerns cluster around: ${concernTerms.join(', ')}. These terms appear most often in negative feedback and point to areas requiring immediate attention.`,
     );
   }
 
+  // Emotional tone
   const emotionTotals = items.reduce(
     (acc, it) => {
       (Object.keys(acc) as EmotionLabel[]).forEach((e) => {
@@ -253,9 +278,10 @@ function generateInsights(
   );
   const dominantEmo = dominantEmotionAcross(emotionTotals);
   insights.push(
-    `The dominant emotional signal is "${dominantEmo}". This emotional tone shapes how your audience is likely to act — ${dominantEmo === 'angry' || dominantEmo === 'frustrated' ? 'frustrated users tend to churn and share negative word-of-mouth' : dominantEmo === 'happy' || dominantEmo === 'excited' ? 'positive users are more likely to recommend and remain loyal' : 'neutral audiences may need clearer value communication to convert'}.`,
+    `The dominant emotional signal is "${dominantEmo}". This emotional tone shapes how your audience is likely to act — ${dominantEmo === 'angry' || dominantEmo === 'frustrated' ? 'frustrated users tend to churn and share negative word-of-mouth' : dominantEmo === 'happy' || dominantEmo === 'excited' ? 'positive users are more likely to recommend and remain loyal' : dominantEmo === 'appreciative' ? 'appreciative users are receptive to upsells and deeper engagement' : dominantEmo === 'disappointed' || dominantEmo === 'sad' ? 'disappointed users may not return unless their concerns are addressed' : 'neutral audiences may need clearer value communication to convert'}.`,
   );
 
+  // Volume-based signals
   if (overall.negative > 0.25) {
     insights.push(
       `Negative sentiment represents ${Math.round(overall.negative * 100)}% of the dataset — a meaningful share. Addressing the top complaints could materially shift overall perception and reduce churn risk.`,
@@ -267,13 +293,10 @@ function generateInsights(
     );
   }
 
-  insights.push(
-    `Audience behaviour signals: viewers are ${overall.positive > overall.negative ? 'engaged and vocal about what works' : 'vocal about friction points'}. ${themes.length ? 'They tend to cluster discussion around ' + themes.slice(0, 2).map((t) => t.label).join(' and ') + '.' : 'Discussion is broadly distributed with no single dominant theme.'}`,
-  );
-
-  if (negKeywords.length) {
+  // Content-aware opportunity
+  if (concernTerms.length) {
     insights.push(
-      `Opportunity: converting the negative feedback around ${negKeywords.slice(0, 2).map((k) => k.word).join(' and ')} into improvements could differentiate you from competitors who ignore these signals.`,
+      `Opportunity: converting the negative feedback around ${concernTerms.slice(0, 2).join(' and ')} into improvements could differentiate you from competitors who ignore these signals.`,
     );
   }
   insights.push(
@@ -294,10 +317,21 @@ function generateRecommendations(
   const recs: string[] = [];
   const negKeywords = keywords.filter((k) => k.sentiment === 'negative');
   const posKeywords = keywords.filter((k) => k.sentiment === 'positive');
+  const themes = identifyContentThemes(items);
+  const negativeThemes = themes.filter((t) => t.sentiment === 'negative');
+  const positiveThemes = themes.filter((t) => t.sentiment === 'positive');
 
+  // Theme-driven recommendations (highest priority — based on actual content)
+  for (const theme of negativeThemes.slice(0, 2)) {
+    const sampleQuote = theme.items.find((i) => i.result.label === 'negative');
+    const quoteText = sampleQuote ? ` For example: "${sampleQuote.text.slice(0, 100)}${sampleQuote.text.length > 100 ? '...' : ''}"` : '';
+    recs.push(`Address the "${theme.label}" issue — it appears in ${theme.items.length} entries with negative sentiment.${quoteText}`);
+  }
+
+  // Keyword-based pattern matching
   if (negKeywords.some((k) => ['support', 'service', 'response', 'reply', 'help'].includes(k.word))) {
     recs.push('Improve customer support responsiveness — set a target first-reply time under 2 hours and add self-service resources for common questions.');
-  } else if (overall.negative > 0.2) {
+  } else if (overall.negative > 0.2 && !negativeThemes.length) {
     recs.push('Strengthen customer support channels — even without explicit complaints, proactive support reduces negative sentiment drift.');
   }
 
@@ -313,7 +347,10 @@ function generateRecommendations(
     recs.push('Prioritize stability and performance fixes — create a public bug tracker and ship a quality-focused release to rebuild trust.');
   }
 
-  if (posKeywords.length) {
+  // Promote what people love (use themes if available, fall back to keywords)
+  if (positiveThemes.length) {
+    recs.push(`Promote frequently praised themes — ${positiveThemes.slice(0, 3).map((t) => `"${t.label}"`).join(', ')} are clear strengths; feature them in marketing and onboarding.`);
+  } else if (posKeywords.length) {
     recs.push(`Promote frequently praised features — ${posKeywords.slice(0, 3).map((k) => k.word).join(', ')} are clear strengths; feature them in marketing and onboarding.`);
   }
 
@@ -330,6 +367,10 @@ function generateRecommendations(
 
   if (overall.positive > 0.4) {
     recs.push('Launch a referral or advocacy program — your satisfied users are your best growth channel right now.');
+  }
+
+  if (overall.neutral > 0.5) {
+    recs.push('A large share of feedback is neutral — consider gathering more specific feedback through targeted surveys to understand what would move these users to a strong opinion.');
   }
 
   return recs.slice(0, 8);

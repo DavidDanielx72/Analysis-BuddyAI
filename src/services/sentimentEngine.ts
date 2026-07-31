@@ -61,6 +61,14 @@ const POSITIVE_WORDS = new Set([
   'entertaining','hilarious','funny','amusing','delightful','refreshing',
   'satisfying','rewarding','fulfilling','meaningful','impactful','valuable',
   'insightful','profound',
+  // Functional / utility praise
+  'useful','helpful','effective','efficient','practical','handy','convenient',
+  'reliable','dependable','consistent','accurate','precise','informative',
+  'educational','constructive','beneficial','productive','worthwhile','legit',
+  'genuine','authentic','credible','trustworthy','solid','sound','logical',
+  'reasonable','sensible','wise','smart','clever','brilliant','genius',
+  // Agreement / validation
+  'agree','agreed','exactly','true','correct','right','nailed','facts','relatable',
   // Welcome-back / return
   'back','returned','welcome','finally','glad','missed','missing','return',
   'returns','returning','here','yooo','yoooo','omg','omggg','lets','go',
@@ -83,6 +91,8 @@ const NEGATIVE_WORDS = new Set([
   'unreliable','unstable','insecure','vulnerable','spam','fake','liar','lies',
   'misleading','deceptive','careless','negligent','sloppy','tedious','painful',
   'regret','disaster','nightmare','garbage','trash','rubbish','pathetic',
+  'mediocre','pointless','subpar','lackluster','underwhelming','overhyped',
+  'unhelpful','inconvenient','disorganized','amateurish','uninspired',
   // Negative emotions
   'depressing','depressed','bleak','grim','dread','dreadful','miserable','suffering',
   'suffer','suffered','agony','torment','anguish','despair','hopeless','helpless',
@@ -239,6 +249,27 @@ const PHRASE_PATTERNS: PhrasePattern[] = [
   { regex: /\b(snag|snagged|got)\s+a?\s*(picture|photo|pic|selfie)\b/i, sentiment: 'positive', weight: 1.3, emotion: 'excited' },
   { regex: /\b(happy\s+(to|that)\s+(hear|see|have|welcome|be))\b/i, sentiment: 'positive', weight: 1.4, emotion: 'happy' },
   { regex: /\b(travels\s+went\s+well|all\s+good|all\s+went\s+well)\b/i, sentiment: 'positive', weight: 1.2, emotion: 'happy' },
+  // --- Common review/feedback phrases ---
+  { regex: /\b(well\s+done|great\s+job|good\s+job|nice\s+work|great\s+work)\b/i, sentiment: 'positive', weight: 1.5, emotion: 'appreciative' },
+  { regex: /\b(works\s+(great|perfectly|well|flawlessly|beautifully|like\s+a\s+charm))\b/i, sentiment: 'positive', weight: 1.6, emotion: 'happy' },
+  { regex: /\b(does\s+(the\s+job|exactly\s+what|just\s+what|everything\s+it))\b/i, sentiment: 'positive', weight: 1.4, emotion: 'appreciative' },
+  { regex: /\b(highly\s+recommend|would\s+recommend|definitely\s+recommend|strongly\s+recommend)\b/i, sentiment: 'positive', weight: 1.8, emotion: 'appreciative' },
+  { regex: /\b(game\s+changer|game\s+changing|changed\s+the\s+game|must\s+have|must-have|must\s+try|must\s+watch|must\s+read)\b/i, sentiment: 'positive', weight: 1.8, emotion: 'excited' },
+  { regex: /\b(exceeded\s+(my|our)\s+expectations|beyond\s+expectations|blew\s+(me|us)\s+away|blew\s+my\s+mind)\b/i, sentiment: 'positive', weight: 2.0, emotion: 'excited' },
+  { regex: /\b((five|5)\s+stars|(ten|10)\s*out\s+of\s+(ten|10)|10\/10|two\s+thumbs\s+up|top\s+notch)\b/i, sentiment: 'positive', weight: 1.6, emotion: 'excited' },
+  { regex: /\b(can'?t\s+go\s+wrong|you\s+won'?t\s+regret|no\s+regrets)\b/i, sentiment: 'positive', weight: 1.4, emotion: 'happy' },
+  { regex: /\b(really\s+(good|great|nice|helpful|useful|impressive|enjoyable|solid))\b/i, sentiment: 'positive', weight: 1.5, emotion: 'happy' },
+  { regex: /\b(so\s+(much|very)\s+(helpful|useful|informative|effective|good|great|nice))\b/i, sentiment: 'positive', weight: 1.5, emotion: 'appreciative' },
+  // --- Common negative phrases ---
+  { regex: /\b(doesn'?t\s+work|don'?t\s+work|not\s+working|stopped\s+working)\b/i, sentiment: 'negative', weight: 2.0, emotion: 'frustrated' },
+  { regex: /\b(not\s+worth\s+(it|the|your)|isn'?t\s+worth|not\s+worth\s+the\s+(money|hype|time))\b/i, sentiment: 'negative', weight: 1.8, emotion: 'disappointed' },
+  { regex: /\b(would\s+not\s+recommend|cannot\s+recommend|can'?t\s+recommend|do\s+not\s+recommend)\b/i, sentiment: 'negative', weight: 1.8, emotion: 'disappointed' },
+  { regex: /\b(poor\s+(quality|service|design|performance|experience|customer\s+service))\b/i, sentiment: 'negative', weight: 1.8, emotion: 'disappointed' },
+  { regex: /\b(hard\s+to\s+(use|navigate|understand|read|follow)|difficult\s+to\s+(use|navigate|understand))\b/i, sentiment: 'negative', weight: 1.5, emotion: 'frustrated' },
+  { regex: /\b(lost\s+(my|our)\s+(time|money)|wasted\s+(my|our)\s+(time|money))\b/i, sentiment: 'negative', weight: 2.0, emotion: 'frustrated' },
+  { regex: /\b(keep\s+(crashing|freezing|lagging|breaking)|keeps\s+(crashing|freezing|lagging))\b/i, sentiment: 'negative', weight: 2.0, emotion: 'frustrated' },
+  { regex: /\b(overpromised|over\s+promised|underdelivered|under\s+delivered|fell\s+short|falls\s+short)\b/i, sentiment: 'negative', weight: 1.8, emotion: 'disappointed' },
+  { regex: /\b((zero|no)\s+stars|one\s+star|1\s+star|0\/10|1\/10|two\s+thumbs\s+down)\b/i, sentiment: 'negative', weight: 1.8, emotion: 'disappointed' },
 
   // --- Storytelling / joke framing (positive context) ---
   // "Bro got the worst X, did Y, then fled" = humorous positive
@@ -371,13 +402,13 @@ export const STOPWORDS = new Set([
   'their','what','which','who','whom','whose','how','why','where','of','as','also',
   'would','could','should','really','get','got',
   'one','two','go','going','im','ive','id','dont','cant','wont','didnt','thats',
-  'theres','use','using','used','like','even','still','much','many','well','way',
+  'theres','use','using','used','even','still','much','many','way',
   'thing','things','something','everything','nothing','anything','someone',
   'anyone','everyone','say','said','says','make','made','makes','want','wants',
   'wanted','need','needs','needed','think','thought','know','knew','see','seen',
   'look','looked','come','came','take','took','give','gave','find','found','tell',
   'told','ask','asked','try','tried','feel','felt','become','became','leave','left',
-  'put','let','keep','kept','begin','began','seem','seemed','help','helped','show',
+  'put','let','keep','kept','begin','began','seem','seemed','show',
   'showed','run','play','move','live','believe','hold','bring','happen',
   'happened','write','written','sit','sitting','stand','standing','lose','lost',
   'pay','paid','meet','met','include','included','continue','set','learn',
@@ -385,15 +416,15 @@ export const STOPWORDS = new Set([
   'watching','follow','followed','stop','stopped','create','created','speak',
   'spoke','read','allow','allowed','add','added','spend','spent','grow','grew',
   'open','opened','walk','walked','win','won','offer','offered','remember',
-  'remembered','love','loved','consider','considered','appear','appeared','buy',
+  'remembered','consider','considered','appear','appeared','buy',
   'bought','wait','waited','serve','served','die','died','send','sent','expect',
   'expected','build','built','stay','stayed','fall','fell','cut','reach',
   'reached','kill','killed','raise','raised','pass','passed','sell','sold',
-  'decide','decided','return','returned','explain','explained','hope','hoped',
+  'decide','decided','explain','explained','hope','hoped',
   'develop','developed','carry','carried','break','broke','receive','received',
-  'agree','agreed','support','supported','hit','hitting','produce','produced',
+  'hit','hitting','produce','produced',
   'eat','ate','cover','covered','catch','caught','draw','drew','choose','chose',
-  'point','pointed','save','saved','design','designed','occur','occurred',
+  'point','pointed','occur','occurred',
   // Common filler
   'bro','yo','yoo','yooo','omg','omggg','nah','yeah','yes','no','ok','okay',
   'lol','lmao','fr','smh','tbh','ngl','like','literally','actually','basically',
@@ -616,14 +647,10 @@ export function analyzeSentiment(text: string): SentimentResult {
     const remaining = 1 - neutralScore;
 
     // Ratio determines split of remaining score
-    const ratio = diff / signal; // -1 to 1
-    if (ratio >= 0) {
-      positiveScore = remaining * (0.55 + ratio * 0.45);
-      negativeScore = remaining * (0.45 - ratio * 0.45);
-    } else {
-      positiveScore = remaining * (0.55 + ratio * 0.45);
-      negativeScore = remaining * (0.45 - ratio * 0.45);
-    }
+    // ratio is -1 (all negative) to +1 (all positive), 0 = balanced
+    const ratio = diff / signal;
+    positiveScore = remaining * (0.5 + ratio * 0.5);
+    negativeScore = remaining * (0.5 - ratio * 0.5);
     // Clamp to valid range
     positiveScore = Math.max(0.02, positiveScore);
     negativeScore = Math.max(0.02, negativeScore);
