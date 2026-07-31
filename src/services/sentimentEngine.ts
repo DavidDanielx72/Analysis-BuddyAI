@@ -359,7 +359,7 @@ const EMOTION_LEXICONS: EmotionLexicon[] = [
 ];
 
 // ---- Stopwords for keyword extraction ----
-const STOPWORDS = new Set([
+export const STOPWORDS = new Set([
   'the','a','an','and','or','but','if','then','else','when','at','by','for','with',
   'about','against','between','into','through','during','before','after','above',
   'below','to','from','up','down','in','out','on','off','over','under','again',

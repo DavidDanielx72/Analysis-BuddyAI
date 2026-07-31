@@ -5,7 +5,7 @@ import type {
   EmotionLabel,
   SentimentLabel,
 } from '@/types';
-import { analyzeSentiment, dominantEmotionAcross, extractKeywords } from './sentimentEngine';
+import { analyzeSentiment, dominantEmotionAcross, extractKeywords, STOPWORDS } from './sentimentEngine';
 
 // ---- Topic extraction (n-gram based with filtering) ----
 
